@@ -169,6 +169,705 @@
   <div class="name-title">ADD TO LEADERBOARD</div>
   <div class="score-big" id="ns-score">000m</div>
   <div class="name-sub">Enter your name:</div>
+  <div style="font-size:18px;font-weight:700;color:rgba(255,180,100,0.95);text-align:center;line-height:1.5;padding:4px 0;">Please do not cheat 🥺<br>Only for scores played on AxisBoard</div>
+  <input id="name-input" type="text" maxlength="16" placeholder="Your name" autocomplete="off" autocorrect="off" spellcheck="false">
+  <button class="btn-primary" onclick="submitScore()">SUBMIT SCORE</button>
+  <button class="btn-ghost" onclick="skipSubmit()">← CANCEL</button>
+</div>
+
+<!-- COUNTDOWN -->
+<div id="countdown-screen" class="screen hidden">
+  <div class="countdown-num" id="countdown-num">3</div>
+  <div class="countdown-lbl">GET READY</div>
+</div>
+
+<!-- GAMEOVER -->
+<div id="gameover-screen" class="screen hidden">
+  <div class="gameover-title">TIME'S UP!</div>
+  <div class="score-big" id="go-score">000m</div>
+  <div class="subtitle">distance traveled</div>
+  <div id="go-best" class="best-large" style="display:none"></div>
+  <button class="btn-primary large" onclick="startCountdown()">PLAY AGAIN</button>
+  <button id="lb-submit-btn" class="btn-primary" style="background:#3399ff;color:#fff;" onclick="openNameEntry()">➕  ADD TO LEADERBOARD</button>
+  <button class="btn-ghost" onclick="showLeaderboard()">🏆  LEADERBOARD</button>
+  <button class="btn-ghost" onclick="showMenu()">MENU</button>
+</div>
+
+<!-- HUD -->
+<div id="hud" style="display:none">
+  <div id="progress-wrapper">
+    <div id="time-label">30.0s</div>
+    <div id="progress-track"><div id="progress-fill"></div></div>
+  </div>
+  <div id="hud-centre">
+    <div id="dist-row">
+      <div id="dist-text">000m</div>
+      <div id="speed-box">
+        <div id="speed-num">0</div>
+        <div id="speed-unit">km/h</div>
+      </div>
+    </div>
+    <div id="best-inline" style="display:none"></div>
+  </div>
+  <button id="sound-btn" onclick="toggleSound()">🔊</button>
+  <button id="quit-btn" onclick="endGame()">■  QUIT</button>
+</div>
+
+<div id="perm-notice">Tap PLAY then allow motion access if prompted</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// CONFIG — replace with your own JSONBin details (free at jsonbin.io)
+// 1. Sign up at jsonbin.io
+// 2. Create a new bin with content: {"scores":[]}
+// 3. Paste the bin ID and your API key below
+// ═══════════════════════════════════════════════════════════════
+const JSONBIN_ID  = '6a3ac4bcda38895dfef30129';
+const JSONBIN_KEY = '$2a$10$RUdllaAnF0Qv6SlgZsRpb.FFEGo7f9ubUuPqfkCreq3soBpO5y3RO';
+const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_ID}`;
+
+// ═══════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════
+const GAME_DURATION  = 30;
+const COUNTDOWN_SECS = 3;
+const MAX_TILT_DEG   = 20;
+const BASE_SPEED     = 220;
+const MAX_SPEED_MULT = 1.5;
+const NUM_SMOKE      = 6;
+
+let W = window.innerWidth, H = window.innerHeight;
+const ROAD_PAVED=32,FADE_STRIPS=6,FADE_WIDTH=26,STRIP_W=FADE_WIDTH/FADE_STRIPS;
+const TOTAL_ROAD=ROAD_PAVED+FADE_WIDTH*2, ROAD_MARGIN=TOTAL_ROAD/2+10;
+const CAR_W=38, CAR_H=72;
+const TREE_TRACK_H=H+300, NUM_TREES_SIDE=14;
+
+// ═══════════════════════════════════════════════════════════════
+// COLOUR HELPERS
+// ═══════════════════════════════════════════════════════════════
+function hexToRgb(h){return[1,3,5].map(o=>parseInt(h.slice(o,o+2),16));}
+function lerpN(a,b,t){return Math.round(a+(b-a)*t);}
+function rgbToHex(r,g,b){return'#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');}
+const GRASS='#3a7d2e',ASPHALT='#2b2b2b';
+const [aR,aG,aB]=hexToRgb(ASPHALT),[gR,gG,gB]=hexToRgb(GRASS);
+const STRIPS=Array.from({length:FADE_STRIPS},(_,i)=>{
+  const t=(i+0.5)/FADE_STRIPS;
+  return rgbToHex(lerpN(aR,gR,t),lerpN(aG,gG,t),lerpN(aB,gB,t));
+});
+
+// ═══════════════════════════════════════════════════════════════
+// TREES
+// ═══════════════════════════════════════════════════════════════
+function seededRand(seed){let s=seed;return()=>{s=(s*1664525+1013904223)&0xffffffff;return(s>>>0)/0xffffffff;};}
+function generateTrees(side){
+  const rand=seededRand(side==='left'?42:137);
+  const sideW=W/2-ROAD_MARGIN, minX=side==='left'?-W/2+10:ROAD_MARGIN;
+  return Array.from({length:NUM_TREES_SIDE},(_,i)=>{
+    const sp=TREE_TRACK_H/NUM_TREES_SIDE;
+    return{y:i*sp+rand()*sp*0.7,x:minX+rand()*(sideW-50),scale:0.7+rand()*0.6,dark:rand()>0.5};
+  });
+}
+let TREES=[...generateTrees('left'),...generateTrees('right')];
+
+// ═══════════════════════════════════════════════════════════════
+// CANVAS
+// ═══════════════════════════════════════════════════════════════
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+function resize(){
+  W=window.innerWidth;H=window.innerHeight;
+  canvas.width=W;canvas.height=H;
+  TREES=[...generateTrees('left'),...generateTrees('right')];
+  updateHudPositions();
+}
+window.addEventListener('resize',resize);
+resize();
+
+function updateHudPositions(){
+  const safeTop=parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sat')||'0')||44;
+  const top=Math.max(44,safeTop+8);
+  const pw=document.getElementById('progress-wrapper');
+  if(pw)pw.style.top=top+'px';
+  const hc=document.getElementById('hud-centre');
+  if(hc)hc.style.top=(top+66)+'px';
+  const sb=document.getElementById('sound-btn');
+  if(sb)sb.style.top=(top+66)+'px';
+  const qb=document.getElementById('quit-btn');
+  if(qb)qb.style.bottom='4px';
+}
+document.documentElement.style.setProperty('--sat','env(safe-area-inset-top)');
+setTimeout(updateHudPositions,200);
+
+// ═══════════════════════════════════════════════════════════════
+// WAKE LOCK — prevents screen sleeping during gameplay
+// ═══════════════════════════════════════════════════════════════
+let wakeLock=null;
+async function acquireWakeLock(){
+  if(!('wakeLock' in navigator)) return;
+  try{wakeLock=await navigator.wakeLock.request('screen');}catch(_){}
+}
+async function releaseWakeLock(){
+  if(wakeLock){try{await wakeLock.release();}catch(_){} wakeLock=null;}
+}
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible'&&phase==='playing') acquireWakeLock();
+});
+
+// ═══════════════════════════════════════════════════════════════
+// SHAKE EFFECT — visual border shake when on grass
+// ═══════════════════════════════════════════════════════════════
+let shakeX=0, shakeY=0, shakeIntensity=0;
+const shakeFrame=document.getElementById('shake-frame');
+
+function updateShake(isOffRoad, overRatio, dt){
+  if(isOffRoad && overRatio>0.05){
+    shakeIntensity=Math.min(1,shakeIntensity+dt*4);
+    const mag=overRatio*10*shakeIntensity;
+    shakeX=(Math.random()-0.5)*mag;
+    shakeY=(Math.random()-0.5)*mag;
+    // Red border grows with intensity
+    const bw=Math.round(overRatio*10);
+    shakeFrame.style.boxShadow=`inset 0 0 0 ${bw}px rgba(255,0,0,${0.3+overRatio*0.5})`;
+    canvas.style.transform=`translate(${shakeX}px,${shakeY}px)`;
+  } else {
+    shakeIntensity=Math.max(0,shakeIntensity-dt*6);
+    shakeX*=0.8; shakeY*=0.8;
+    shakeFrame.style.boxShadow='none';
+    canvas.style.transform=`translate(${shakeX}px,${shakeY}px)`;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════
+let phase='menu';
+let score=0, bestScore=parseInt(localStorage.getItem('axisdrive_best')||'0');
+let timeLeft=GAME_DURATION, gameStartTime=0;
+let tilt=0, carXTarget=0, carXSmoothed=0;
+let speed=1.0, treeScrollY=0, grassOverlay=0, offRoad=false;
+let soundOn=true, rafId=null, timerInterval=null, lastFrame=0;
+let smoke=[], vibStart=1, vibMax=5, vibMinI=0.2, vibMaxI=1.0, lastVibTime=0;
+let pendingScore=0;
+
+// ═══════════════════════════════════════════════════════════════
+// AUDIO
+// ═══════════════════════════════════════════════════════════════
+let audioCtx=null, engineGain=null, grassGain=null;
+function initAudio(){
+  if(audioCtx)return;
+  try{
+    audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+    engineGain=audioCtx.createGain();engineGain.gain.value=0;engineGain.connect(audioCtx.destination);
+    [[80,0.4,'sawtooth'],[160,0.2,'square'],[240,0.1,'sawtooth']].forEach(([f,a,t])=>{
+      const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+      g.gain.value=a;o.frequency.value=f;o.type=t;
+      o.connect(g);g.connect(engineGain);o.start();
+    });
+    const bl=audioCtx.sampleRate*2,buf=audioCtx.createBuffer(1,bl,audioCtx.sampleRate),d=buf.getChannelData(0);
+    let b=0;for(let i=0;i<bl;i++){const w=Math.random()*2-1;b=b*0.99+w*0.01;d[i]=w*0.3+b*5;}
+    const src=audioCtx.createBufferSource();src.buffer=buf;src.loop=true;
+    const flt=audioCtx.createBiquadFilter();flt.type='bandpass';flt.frequency.value=600;
+    grassGain=audioCtx.createGain();grassGain.gain.value=0;
+    src.connect(flt);flt.connect(grassGain);grassGain.connect(audioCtx.destination);src.start();
+  }catch(e){audioCtx=null;}
+}
+function setEngineVol(v){if(!audioCtx||!soundOn)return;engineGain.gain.setTargetAtTime(v*0.3,audioCtx.currentTime,0.05);}
+function setGrassVol(v){if(!audioCtx)return;grassGain.gain.setTargetAtTime(soundOn?v*0.5:0,audioCtx.currentTime,0.05);}
+function stopAllAudio(){if(!audioCtx)return;engineGain&&engineGain.gain.setTargetAtTime(0,audioCtx.currentTime,0.1);grassGain&&grassGain.gain.setTargetAtTime(0,audioCtx.currentTime,0.1);}
+
+// ═══════════════════════════════════════════════════════════════
+// MOTION
+// ═══════════════════════════════════════════════════════════════
+function requestMotion(){
+  if(typeof DeviceMotionEvent!=='undefined'&&typeof DeviceMotionEvent.requestPermission==='function'){
+    DeviceMotionEvent.requestPermission().then(r=>{if(r==='granted')listenMotion();}).catch(()=>{});
+  }else listenMotion();
+}
+function listenMotion(){
+  window.addEventListener('deviceorientation',e=>{tilt=Math.max(-1,Math.min(1,(e.gamma||0)/MAX_TILT_DEG));});
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SMOKE
+// ═══════════════════════════════════════════════════════════════
+function updateSmoke(dt){smoke=smoke.filter(p=>p.life>0);smoke.forEach(p=>{p.y-=30*dt;p.size+=12*dt;p.life-=1.2*dt;});}
+function drawSmoke(){smoke.forEach(p=>{ctx.save();ctx.globalAlpha=p.life*0.45;ctx.fillStyle='#aaa';ctx.beginPath();ctx.arc(p.x,p.y,p.size,0,Math.PI*2);ctx.fill();ctx.restore();});}
+
+// ═══════════════════════════════════════════════════════════════
+// DRAWING
+// ═══════════════════════════════════════════════════════════════
+function drawScene(){
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#1a3050';ctx.fillRect(0,0,W,H*0.38);
+  ctx.fillStyle=GRASS;ctx.fillRect(0,0,W,H);
+  let sx=W/2-TOTAL_ROAD/2;
+  STRIPS.slice().reverse().forEach(c=>{ctx.fillStyle=c;ctx.fillRect(sx,0,STRIP_W,H);sx+=STRIP_W;});
+  ctx.fillStyle=ASPHALT;ctx.fillRect(sx,0,ROAD_PAVED,H);sx+=ROAD_PAVED;
+  STRIPS.forEach(c=>{ctx.fillStyle=c;ctx.fillRect(sx,0,STRIP_W,H);sx+=STRIP_W;});
+
+  TREES.forEach(t=>{
+    const sy=(t.y+treeScrollY)%TREE_TRACK_H-TREE_TRACK_H*0.05;
+    [sy,sy-TREE_TRACK_H].forEach(y=>{if(y>H+100||y<-200)return;drawTree(W/2+t.x,y,t.scale,t.dark);});
+  });
+
+  if(bestScore>0&&score>0&&score>=bestScore-20&&score<=bestScore){
+    const fr=(score-(bestScore-20))/20;
+    ctx.save();ctx.globalAlpha=0.4+fr*0.6;ctx.strokeStyle='#F0E130';ctx.lineWidth=4;
+    ctx.shadowColor='#F0E130';ctx.shadowBlur=8;ctx.beginPath();
+    const ly=H*0.35+fr*(H*0.5-H*0.35);
+    ctx.moveTo(W/2-TOTAL_ROAD/2,ly);ctx.lineTo(W/2+TOTAL_ROAD/2,ly);ctx.stroke();
+    ctx.fillStyle='#F0E130';ctx.font='bold 11px -apple-system,sans-serif';ctx.textAlign='center';
+    ctx.fillText('🏆 BEAT IT!',W/2,ly-6);ctx.restore();
+  }
+
+  drawCar(W/2+carXSmoothed,H*0.86,offRoad);
+  if(offRoad)smoke.push({x:W/2+carXSmoothed+(Math.random()*10-5),y:H*0.86-CAR_H*0.85,life:1,size:8+Math.random()*8});
+  drawSmoke();
+  document.getElementById('grass-overlay').style.opacity=grassOverlay;
+}
+
+function drawTree(cx,baseY,scale,dark){
+  const dc=dark?'#0f4a0a':'#165c10',mc=dark?'#147010':'#1d7a14',lc=dark?'#1a6b14':'#228b18';
+  const tw=Math.round(8*scale),th=Math.round(18*scale);
+  const t1w=Math.round(44*scale),t1h=Math.round(28*scale);
+  const t2w=Math.round(34*scale),t2h=Math.round(22*scale);
+  const t3w=Math.round(22*scale),t3h=Math.round(16*scale);
+  ctx.fillStyle='#5c3317';rr(cx-tw/2,baseY,tw,th,3);
+  ctx.fillStyle=lc;el(cx,baseY-t1h*0.85+t1h/2,t1w/2,t1h/2);
+  ctx.fillStyle=mc;el(cx,baseY-t1h*0.85-t2h*0.75+t2h/2,t2w/2,t2h/2);
+  ctx.fillStyle=dc;el(cx,baseY-t1h*0.85-t2h*0.75-t3h*0.7+t3h/2,t3w/2,t3h/2);
+}
+function rr(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.arcTo(x+w,y,x+w,y+r,r);ctx.lineTo(x+w,y+h-r);ctx.arcTo(x+w,y+h,x+w-r,y+h,r);ctx.lineTo(x+r,y+h);ctx.arcTo(x,y+h,x,y+h-r,r);ctx.lineTo(x,y+r);ctx.arcTo(x,y,x+r,y,r);ctx.closePath();ctx.fill();}
+function el(cx,cy,rx,ry){ctx.beginPath();ctx.ellipse(cx,cy,rx,ry,0,0,Math.PI*2);ctx.fill();}
+
+function drawCar(cx,baseY,og){
+  ctx.save();if(og)ctx.globalAlpha=0.85;
+  const x=cx-CAR_W/2,y=baseY-CAR_H;
+  const ww=9,wh=14,wx=-4;
+  ctx.fillStyle='#111';
+  [[x+wx-ww,y+8],[x+CAR_W-wx,y+8],[x+wx-ww,y+CAR_H-8-wh],[x+CAR_W-wx,y+CAR_H-8-wh]].forEach(([px,py])=>{rr(px,py,ww,wh,2);});
+  ctx.fillStyle='#dd3333';rr(x+2,y,CAR_W-4,12,5);
+  ctx.fillStyle='rgba(136,204,238,0.85)';rr(x+3,y+13,CAR_W-6,8,2);
+  ctx.fillStyle='#dd3333';ctx.fillRect(x,y+22,CAR_W,18);
+  ctx.fillStyle='rgba(136,204,238,0.85)';ctx.fillRect(x,y+22,6,18);ctx.fillRect(x+CAR_W-6,y+22,6,18);
+  ctx.fillStyle='rgba(136,204,238,0.75)';rr(x+3,y+41,CAR_W-6,7,2);
+  ctx.fillStyle='#dd3333';rr(x+2,y+49,CAR_W-4,10,4);
+  ctx.fillStyle='#ffffcc';ctx.fillRect(x+4,y,8,5);ctx.fillStyle='#eee';ctx.fillRect(x+CAR_W-12,y,8,5);
+  ctx.fillStyle='#ff2222';ctx.fillRect(x+4,y+CAR_H-5,8,5);ctx.fillRect(x+CAR_W-12,y+CAR_H-5,8,5);
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GAME LOOP
+// ═══════════════════════════════════════════════════════════════
+function gameLoop(ts){
+  if(phase!=='playing'){rafId=null;return;}
+  const dt=lastFrame?Math.min((ts-lastFrame)/1000,0.05):0.016;
+  lastFrame=ts;
+
+  const norm=Math.max(-1,Math.min(1,tilt));
+  const maxOffset=W/2-CAR_W/2-4;
+  carXTarget=norm*maxOffset;
+  const lf=1-Math.pow(0.012,dt);
+  carXSmoothed+=(carXTarget-carXSmoothed)*lf;
+
+  const absX=Math.abs(carXSmoothed),roadHalf=TOTAL_ROAD/2;
+  offRoad=absX>roadHalf;
+  const overRatio=offRoad?Math.min(1,(absX-roadHalf)/(maxOffset-roadHalf)):0;
+  const targetO=offRoad?0.18+overRatio*0.42:0;
+  grassOverlay+=(targetO-grassOverlay)*0.15;
+
+  if(offRoad){const o=Math.min(1,(absX-roadHalf)/(maxOffset-roadHalf));speed=Math.max(0.05,speed-(0.04+o*o*0.18));}
+  else speed=Math.min(MAX_SPEED_MULT,speed+0.012);
+
+  treeScrollY=(treeScrollY+BASE_SPEED*speed*dt)%TREE_TRACK_H;
+  score+=BASE_SPEED*speed*dt*0.04;
+  updateSmoke(dt);
+  updateShake(offRoad, overRatio, dt);
+  setEngineVol(speed/MAX_SPEED_MULT);
+  setGrassVol(offRoad?0.2+overRatio*0.5:0);
+
+  if(offRoad&&navigator.vibrate){
+    const td=Math.abs(Math.asin(Math.max(-1,Math.min(1,tilt))))*180/Math.PI;
+    if(td>=vibStart){const now=Date.now(),r=Math.min(1,(td-vibStart)/Math.max(0.001,vibMax-vibStart));if(now-lastVibTime>45){lastVibTime=now;navigator.vibrate(r>0.6?30:r>0.3?20:10);}}
+  }
+
+  drawScene();
+  const fs=Math.floor(score);
+  document.getElementById('dist-text').textContent=String(fs).padStart(3,'0')+'m';
+  document.getElementById('speed-num').textContent=Math.round(speed*50);
+  const bi=document.getElementById('best-inline');
+  if(bestScore>0){bi.style.display='block';bi.textContent='🏆 '+bestScore+'m';}
+
+  rafId=requestAnimationFrame(gameLoop);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TIMER
+// ═══════════════════════════════════════════════════════════════
+function startTimer(){
+  clearInterval(timerInterval);
+  timerInterval=setInterval(()=>{
+    const rem=Math.max(0,GAME_DURATION-(Date.now()-gameStartTime)/1000);
+    document.getElementById('time-label').textContent=rem.toFixed(1)+'s';
+    document.getElementById('progress-fill').style.width=((1-rem/GAME_DURATION)*100)+'%';
+    if(rem<=0){clearInterval(timerInterval);endGame();}
+  },100);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE CONTROL
+// ═══════════════════════════════════════════════════════════════
+function allScreensHidden(){['menu-screen','settings-screen','countdown-screen','gameover-screen','leaderboard-screen','name-screen'].forEach(id=>document.getElementById(id).classList.add('hidden'));}
+
+function showMenu(){
+  phase='menu';allScreensHidden();
+  document.getElementById('menu-screen').classList.remove('hidden');
+  document.getElementById('hud').style.display='none';
+  canvas.style.transform='';shakeFrame.style.boxShadow='none';
+  const mb=document.getElementById('menu-best');
+  if(bestScore>0){mb.style.display='block';mb.textContent='🏆 My Best: '+bestScore+'m';}else mb.style.display='none';
+  document.getElementById('perm-notice').style.display='block';
+  releaseWakeLock();
+  loadMiniLeaderboard();
+}
+
+async function loadMiniLeaderboard(){
+  const el=document.getElementById('mini-lb-inner');
+  const medals=['🥇','🥈','🥉'];
+  const myName=localStorage.getItem('axisdrive_name')||'';
+  const scores=await fetchScores();
+  if(!scores||!scores.length){
+    el.innerHTML='<div style="color:#6699aa;font-size:12px;text-align:center;padding:4px 0">No scores yet — be the first!</div>';
+    return;
+  }
+  scores.sort((a,b)=>b.score-a.score);
+  el.innerHTML=scores.slice(0,3).map((s,i)=>`
+    <div class="mini-lb-row">
+      <div class="mini-rank">${medals[i]}</div>
+      <div class="mini-name${s.name===myName?' ':" "}">${s.name.slice(0,18)}</div>
+      <div class="mini-score">${String(s.score).padStart(3,'0')}m</div>
+    </div>`).join('');
+}
+
+function showSettings(){
+  phase='settings';allScreensHidden();
+  document.getElementById('settings-screen').classList.remove('hidden');
+  refreshVibUI();
+}
+
+function startCountdown(){
+  initAudio();requestMotion();
+  document.getElementById('perm-notice').style.display='none';
+  allScreensHidden();
+  document.getElementById('countdown-screen').classList.remove('hidden');
+  document.getElementById('hud').style.display='none';
+  phase='countdown';
+  let c=COUNTDOWN_SECS;
+  document.getElementById('countdown-num').textContent=c;
+  const iv=setInterval(()=>{c--;if(c<=0){clearInterval(iv);beginPlaying();}else document.getElementById('countdown-num').textContent=c;},1000);
+}
+
+function beginPlaying(){
+  score=0;speed=1.0;treeScrollY=0;lastFrame=0;carXSmoothed=0;carXTarget=0;grassOverlay=0;offRoad=false;smoke=[];
+  shakeIntensity=0;shakeX=0;shakeY=0;canvas.style.transform='';shakeFrame.style.boxShadow='none';
+  allScreensHidden();
+  document.getElementById('hud').style.display='block';
+  document.getElementById('progress-fill').style.width='0%';
+  document.getElementById('time-label').textContent=GAME_DURATION+'.0s';
+  document.getElementById('dist-text').textContent='000m';
+  document.getElementById('grass-overlay').style.opacity='0';
+  phase='playing';gameStartTime=Date.now();
+  acquireWakeLock();
+  startTimer();updateHudPositions();
+  rafId=requestAnimationFrame(gameLoop);
+}
+
+function endGame(){
+  if(phase!=='playing')return;
+  phase='gameover';
+  clearInterval(timerInterval);cancelAnimationFrame(rafId);rafId=null;
+  stopAllAudio();releaseWakeLock();
+  document.getElementById('grass-overlay').style.opacity='0';
+  canvas.style.transform='';shakeFrame.style.boxShadow='none';
+  document.getElementById('hud').style.display='none';
+  const fs=Math.floor(score);
+  pendingScore=fs;
+  if(fs>bestScore){bestScore=fs;localStorage.setItem('axisdrive_best',fs);}
+  document.getElementById('go-score').textContent=String(fs).padStart(3,'0')+'m';
+  const gb=document.getElementById('go-best');
+  if(bestScore>0){gb.style.display='block';gb.textContent='🏆 Best: '+bestScore+'m';}
+  allScreensHidden();
+  document.getElementById('gameover-screen').classList.remove('hidden');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LEADERBOARD (JSONBin.io)
+// ═══════════════════════════════════════════════════════════════
+async function fetchScores(){
+  try{
+    // Read without auth key — bin must be set to Public in JSONBin settings
+    const r=await fetch(JSONBIN_URL+'/latest',{
+      method:'GET',
+      headers:{
+        'X-Master-Key':JSONBIN_KEY,
+        'X-Bin-Meta':'false',
+      }
+    });
+    if(!r.ok){
+      const t=await r.text();
+      console.error('JSONBin GET failed:',r.status,t);
+      return null;
+    }
+    const d=await r.json();
+    // d is the record directly when X-Bin-Meta:false
+    return Array.isArray(d.scores)?d.scores:[];
+  }catch(e){
+    console.error('fetchScores error:',e);
+    return null;
+  }
+}
+
+async function putScores(scores){
+  const r=await fetch(JSONBIN_URL,{
+    method:'PUT',
+    headers:{
+      'Content-Type':'application/json',
+      'X-Master-Key':JSONBIN_KEY,
+      'X-Bin-Versioning':'false',
+    },
+    body:JSON.stringify({scores})
+  });
+  if(!r.ok){
+    const t=await r.text();
+    console.error('JSONBin PUT failed:',r.status,t);
+    throw new Error('HTTP '+r.status+': '+t);
+  }
+  return r.json();
+}
+
+async function showLeaderboard(){
+  phase='lb';allScreensHidden();
+  document.getElementById('leaderboard-screen').classList.remove('hidden');
+  const list=document.getElementById('lb-list');
+  list.innerHTML='<div id="lb-loading">Loading...</div>';
+  const scores=await fetchScores();
+  if(!scores.length){list.innerHTML='<div id="lb-loading">No scores yet — be the first!</div>';return;}
+  scores.sort((a,b)=>b.score-a.score);
+  const myName=localStorage.getItem('axisdrive_name')||'';
+  list.innerHTML=scores.slice(0,20).map((s,i)=>`
+    <div class="lb-row${s.name===myName?' me':''}">
+      <div class="lb-rank">${i===0?'🥇':i===1?'🥈':i===2?'🥉':`${i+1}.`}</div>
+      <div class="lb-name">${s.name.slice(0,16)}</div>
+      <div class="lb-score">${String(s.score).padStart(3,'0')}m</div>
+    </div>`).join('');
+}
+
+function openNameEntry(){
+  document.getElementById('ns-score').textContent=String(pendingScore).padStart(3,'0')+'m';
+  // Pre-fill saved name if exists
+  const saved=localStorage.getItem('axisdrive_name');
+  if(saved) document.getElementById('name-input').value=saved;
+  allScreensHidden();
+  document.getElementById('name-screen').classList.remove('hidden');
+  // Focus input after a short delay (iOS keyboard)
+  setTimeout(()=>document.getElementById('name-input').focus(),300);
+}
+
+async function submitScore(){
+  const inp=document.getElementById('name-input');
+  const name=(inp.value.trim()||'Anonymous').slice(0,16);
+  localStorage.setItem('axisdrive_name',name);
+  const btn=document.querySelector('#name-screen .btn-primary');
+  btn.textContent='Submitting...'; btn.disabled=true;
+  try{
+    let scores=await fetchScores();
+    if(scores===null){
+      // Network error — still go to gameover, don't wipe data
+      btn.textContent='SUBMIT SCORE'; btn.disabled=false;
+      alert('Could not connect to leaderboard. Check your connection and try again.');
+      return;
+    }
+    const idx=scores.findIndex(s=>s.name===name);
+    if(idx>=0){ if(pendingScore>scores[idx].score) scores[idx].score=pendingScore; }
+    else scores.push({name, score:pendingScore});
+    scores.sort((a,b)=>b.score-a.score);
+    await putScores(scores.slice(0,100));
+    btn.textContent='SUBMIT SCORE'; btn.disabled=false;
+    allScreensHidden();
+    showLeaderboard();
+  }catch(e){
+    console.error('submitScore error:',e);
+    btn.textContent='SUBMIT SCORE'; btn.disabled=false;
+    alert('Failed to save score: '+e.message);
+  }
+}
+
+function skipSubmit(){
+  allScreensHidden();
+  document.getElementById('gameover-screen').classList.remove('hidden');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SETTINGS
+// ═══════════════════════════════════════════════════════════════
+function adjVib(k,d){
+  if(k==='start')vibStart=Math.max(0,Math.min(vibMax-0.5,+(vibStart+d).toFixed(1)));
+  else if(k==='max')vibMax=Math.max(vibStart+0.5,Math.min(45,+(vibMax+d).toFixed(1)));
+  else if(k==='minI')vibMinI=Math.max(0,Math.min(vibMaxI-0.1,+(vibMinI+d).toFixed(2)));
+  else if(k==='maxI')vibMaxI=Math.max(vibMinI+0.1,Math.min(1,+(vibMaxI+d).toFixed(2)));
+  refreshVibUI();
+}
+function refreshVibUI(){
+  document.getElementById('vib-start-val').textContent=vibStart.toFixed(1)+'°';
+  document.getElementById('vib-max-val').textContent=vibMax.toFixed(1)+'°';
+  document.getElementById('vib-mini-val').textContent=vibMinI.toFixed(2);
+  document.getElementById('vib-maxi-val').textContent=vibMaxI.toFixed(2);
+}
+function resetHighScore(){bestScore=0;localStorage.removeItem('axisdrive_best');alert('Top score reset!');}
+
+async function testConnection(){
+  const btn=event.target; btn.textContent='Testing...'; btn.disabled=true;
+  try{
+    const r=await fetch(JSONBIN_URL+'/latest',{
+      method:'GET',
+      headers:{'X-Master-Key':JSONBIN_KEY,'X-Bin-Meta':'false'}
+    });
+    const text=await r.text();
+    btn.textContent='🔌  TEST LEADERBOARD CONNECTION'; btn.disabled=false;
+    alert('Status: '+r.status+'\n\nResponse:\n'+text.slice(0,300));
+  }catch(e){
+    btn.textContent='🔌  TEST LEADERBOARD CONNECTION'; btn.disabled=false;
+    alert('Connection failed:\n'+e.message+'\n\nMake sure the bin is set to PUBLIC in JSONBin settings.');
+  }
+}
+function toggleSound(){
+  soundOn=!soundOn;
+  document.getElementById('sound-toggle-btn').textContent=soundOn?'🔊  SOUND ON':'🔇  SOUND OFF';
+  document.getElementById('sound-btn').textContent=soundOn?'🔊':'🔇';
+  if(!soundOn)stopAllAudio();else if(phase==='playing')setEngineVol(speed/MAX_SPEED_MULT);
+}
+
+// Restore saved name into input
+const savedName=localStorage.getItem('axisdrive_name');
+if(savedName)document.getElementById('name-input').value=savedName;
+
+// ═══════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════
+showMenu();
+(function drawStatic(){
+  if(phase!=='menu'&&phase!=='settings'&&phase!=='lb') return;
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#1a3050';ctx.fillRect(0,0,W,H*0.38);
+  ctx.fillStyle=GRASS;ctx.fillRect(0,0,W,H);
+  let sx=W/2-TOTAL_ROAD/2;
+  STRIPS.slice().reverse().forEach(c=>{ctx.fillStyle=c;ctx.fillRect(sx,0,STRIP_W,H);sx+=STRIP_W;});
+  ctx.fillStyle=ASPHALT;ctx.fillRect(sx,0,ROAD_PAVED,H);sx+=ROAD_PAVED;
+  STRIPS.forEach(c=>{ctx.fillStyle=c;ctx.fillRect(sx,0,STRIP_W,H);sx+=STRIP_W;});
+  TREES.forEach(t=>drawTree(W/2+t.x,t.y,t.scale,t.dark));
+  requestAnimationFrame(drawStatic);
+})();
+</script>
+</body>
+</html>  .lb-rank{font-size:18px;font-weight:900;color:#F0E130;min-width:30px;}
+  .lb-name{flex:1;font-size:15px;font-weight:700;color:#fff;}
+  .lb-score{font-size:18px;font-weight:900;color:#F0E130;font-family:Menlo,monospace;}
+  #lb-loading{color:#6699aa;font-size:14px;text-align:center;padding:20px;}
+
+  /* Name entry */
+  #name-screen{background:#0a3a6e;}
+  .name-title{font-size:24px;font-weight:900;color:#F0E130;letter-spacing:2px;text-align:center;}
+  .name-sub{font-size:13px;color:#9abf9a;text-align:center;}
+  #name-input{width:100%;background:rgba(255,255,255,0.1);border:2px solid #3399ff;border-radius:10px;padding:14px 16px;font-size:20px;font-weight:700;color:#fff;text-align:center;outline:none;font-family:inherit;}
+  #name-input::placeholder{color:rgba(255,255,255,0.3);}
+
+  #perm-notice{position:absolute;bottom:20px;left:0;right:0;text-align:center;font-size:11px;color:rgba(255,255,255,0.35);padding:0 20px;}
+
+  /* Mini top-3 on menu */
+  .mini-lb-row{display:flex;align-items:center;gap:10px;padding:5px 0;}
+  .mini-lb-row+.mini-lb-row{border-top:1px solid rgba(255,255,255,0.07);}
+  .mini-rank{font-size:18px;min-width:28px;text-align:center;}
+  .mini-name{flex:1;font-size:14px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .mini-score{font-size:16px;font-weight:900;color:#F0E130;font-family:Menlo,monospace;}
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+<div id="grass-overlay"></div>
+<div id="shake-frame"></div>
+
+<!-- MENU -->
+<div id="menu-screen" class="screen">
+  <div class="title">AXIS<br>DRIVE</div>
+  <div id="menu-best" class="best-above" style="display:none"></div>
+
+  <!-- Mini leaderboard top 3 -->
+  <div id="mini-lb" style="width:100%;background:rgba(0,0,0,0.35);border-radius:12px;padding:10px 14px;min-height:52px;">
+    <div id="mini-lb-inner" style="color:#6699aa;font-size:12px;text-align:center;">Loading leaderboard...</div>
+  </div>
+
+  <button class="btn-primary" onclick="startCountdown()">PLAY</button>
+  <button class="btn-ghost" onclick="showLeaderboard()">🏆  FULL LEADERBOARD</button>
+  <button class="btn-ghost" onclick="showSettings()">⚙️  SETTINGS</button>
+</div>
+
+<!-- SETTINGS -->
+<div id="settings-screen" class="screen hidden">
+  <div class="settings-title">SETTINGS</div>
+  <button id="sound-toggle-btn" class="sound-toggle" onclick="toggleSound()">🔊  SOUND ON</button>
+  <div class="settings-note" style="margin-top:16px">Vibration when driving on grass (Android only)</div>
+  <div class="setting-item">
+    <div class="setting-label">Start Angle — when vibration begins</div>
+    <div class="slider-row">
+      <button class="slider-btn" onclick="adjVib('start',-0.5)">−</button>
+      <span class="slider-val" id="vib-start-val">1.0°</span>
+      <button class="slider-btn" onclick="adjVib('start',0.5)">+</button>
+    </div>
+  </div>
+  <div class="setting-item">
+    <div class="setting-label">Max Angle — when vibration is strongest</div>
+    <div class="slider-row">
+      <button class="slider-btn" onclick="adjVib('max',-0.5)">−</button>
+      <span class="slider-val" id="vib-max-val">5.0°</span>
+      <button class="slider-btn" onclick="adjVib('max',0.5)">+</button>
+    </div>
+  </div>
+  <div class="setting-item">
+    <div class="setting-label">Min Intensity</div>
+    <div class="slider-row">
+      <button class="slider-btn" onclick="adjVib('minI',-0.1)">−</button>
+      <span class="slider-val" id="vib-mini-val">0.20</span>
+      <button class="slider-btn" onclick="adjVib('minI',0.1)">+</button>
+    </div>
+  </div>
+  <div class="setting-item">
+    <div class="setting-label">Max Intensity</div>
+    <div class="slider-row">
+      <button class="slider-btn" onclick="adjVib('maxI',-0.1)">−</button>
+      <span class="slider-val" id="vib-maxi-val">1.00</span>
+      <button class="slider-btn" onclick="adjVib('maxI',0.1)">+</button>
+    </div>
+  </div>
+  <button class="btn-reset" onclick="resetHighScore()">🗑  RESET TOP SCORE</button>
+  <button class="btn-ghost" style="border-color:#3399ff;color:#66aaff;margin-top:8px" onclick="testConnection()">🔌  TEST LEADERBOARD CONNECTION</button>
+  <button class="btn-ghost" onclick="showMenu()" style="margin-top:12px">← BACK</button>
+</div>
+
+<!-- LEADERBOARD -->
+<div id="leaderboard-screen" class="screen hidden">
+  <div class="lb-title">LEADERBOARD</div>
+  <div class="lb-subtitle">Top scores from all players</div>
+  <div id="lb-list"><div id="lb-loading">Loading...</div></div>
+  <button class="btn-ghost" onclick="showMenu()" style="margin-top:12px;width:100%">← BACK</button>
+</div>
+
+<!-- NAME ENTRY (opt-in, shown when user taps "Add to Leaderboard") -->
+<div id="name-screen" class="screen hidden">
+  <div class="name-title">ADD TO LEADERBOARD</div>
+  <div class="score-big" id="ns-score">000m</div>
+  <div class="name-sub">Enter your name:</div>
   <input id="name-input" type="text" maxlength="16" placeholder="Your name" autocomplete="off" autocorrect="off" spellcheck="false">
   <button class="btn-primary" onclick="submitScore()">SUBMIT SCORE</button>
   <button class="btn-ghost" onclick="skipSubmit()">← CANCEL</button>
