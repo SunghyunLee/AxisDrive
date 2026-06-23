@@ -141,6 +141,7 @@
     </div>
   </div>
   <button class="btn-reset" onclick="resetHighScore()">🗑  RESET TOP SCORE</button>
+  <button class="btn-ghost" style="border-color:#3399ff;color:#66aaff;margin-top:8px" onclick="testConnection()">🔌  TEST LEADERBOARD CONNECTION</button>
   <button class="btn-ghost" onclick="showMenu()" style="margin-top:12px">← BACK</button>
 </div>
 
@@ -574,16 +575,26 @@ function endGame(){
 // ═══════════════════════════════════════════════════════════════
 async function fetchScores(){
   try{
+    // Read without auth key — bin must be set to Public in JSONBin settings
     const r=await fetch(JSONBIN_URL+'/latest',{
+      method:'GET',
       headers:{
         'X-Master-Key':JSONBIN_KEY,
-        'X-Access-Key':JSONBIN_KEY,
+        'X-Bin-Meta':'false',
       }
     });
-    if(!r.ok){ console.error('JSONBin GET failed:',r.status,await r.text()); return null; }
+    if(!r.ok){
+      const t=await r.text();
+      console.error('JSONBin GET failed:',r.status,t);
+      return null;
+    }
     const d=await r.json();
-    return d.record.scores||[];
-  }catch(e){ console.error('fetchScores error:',e); return null; }
+    // d is the record directly when X-Bin-Meta:false
+    return Array.isArray(d.scores)?d.scores:[];
+  }catch(e){
+    console.error('fetchScores error:',e);
+    return null;
+  }
 }
 
 async function putScores(scores){
@@ -592,10 +603,15 @@ async function putScores(scores){
     headers:{
       'Content-Type':'application/json',
       'X-Master-Key':JSONBIN_KEY,
+      'X-Bin-Versioning':'false',
     },
     body:JSON.stringify({scores})
   });
-  if(!r.ok){ const t=await r.text(); console.error('JSONBin PUT failed:',r.status,t); throw new Error(t); }
+  if(!r.ok){
+    const t=await r.text();
+    console.error('JSONBin PUT failed:',r.status,t);
+    throw new Error('HTTP '+r.status+': '+t);
+  }
   return r.json();
 }
 
@@ -678,6 +694,22 @@ function refreshVibUI(){
   document.getElementById('vib-maxi-val').textContent=vibMaxI.toFixed(2);
 }
 function resetHighScore(){bestScore=0;localStorage.removeItem('axisdrive_best');alert('Top score reset!');}
+
+async function testConnection(){
+  const btn=event.target; btn.textContent='Testing...'; btn.disabled=true;
+  try{
+    const r=await fetch(JSONBIN_URL+'/latest',{
+      method:'GET',
+      headers:{'X-Master-Key':JSONBIN_KEY,'X-Bin-Meta':'false'}
+    });
+    const text=await r.text();
+    btn.textContent='🔌  TEST LEADERBOARD CONNECTION'; btn.disabled=false;
+    alert('Status: '+r.status+'\n\nResponse:\n'+text.slice(0,300));
+  }catch(e){
+    btn.textContent='🔌  TEST LEADERBOARD CONNECTION'; btn.disabled=false;
+    alert('Connection failed:\n'+e.message+'\n\nMake sure the bin is set to PUBLIC in JSONBin settings.');
+  }
+}
 function toggleSound(){
   soundOn=!soundOn;
   document.getElementById('sound-toggle-btn').textContent=soundOn?'🔊  SOUND ON':'🔇  SOUND OFF';
