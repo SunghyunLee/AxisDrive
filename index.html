@@ -84,6 +84,13 @@
   #name-input::placeholder{color:rgba(255,255,255,0.3);}
 
   #perm-notice{position:absolute;bottom:20px;left:0;right:0;text-align:center;font-size:11px;color:rgba(255,255,255,0.35);padding:0 20px;}
+
+  /* Mini top-3 on menu */
+  .mini-lb-row{display:flex;align-items:center;gap:10px;padding:5px 0;}
+  .mini-lb-row+.mini-lb-row{border-top:1px solid rgba(255,255,255,0.07);}
+  .mini-rank{font-size:18px;min-width:28px;text-align:center;}
+  .mini-name{flex:1;font-size:14px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .mini-score{font-size:16px;font-weight:900;color:#F0E130;font-family:Menlo,monospace;}
 </style>
 </head>
 <body>
@@ -95,11 +102,15 @@
 <!-- MENU -->
 <div id="menu-screen" class="screen">
   <div class="title">AXIS<br>DRIVE</div>
-  <div class="subtitle">Stay on the road.<br>Tilt 20° = full edge. 30 seconds.</div>
-  <div class="car-emoji">🏎️</div>
   <div id="menu-best" class="best-above" style="display:none"></div>
+
+  <!-- Mini leaderboard top 3 -->
+  <div id="mini-lb" style="width:100%;background:rgba(0,0,0,0.35);border-radius:12px;padding:10px 14px;min-height:52px;">
+    <div id="mini-lb-inner" style="color:#6699aa;font-size:12px;text-align:center;">Loading leaderboard...</div>
+  </div>
+
   <button class="btn-primary" onclick="startCountdown()">PLAY</button>
-  <button class="btn-ghost" onclick="showLeaderboard()">🏆  LEADERBOARD</button>
+  <button class="btn-ghost" onclick="showLeaderboard()">🏆  FULL LEADERBOARD</button>
   <button class="btn-ghost" onclick="showSettings()">⚙️  SETTINGS</button>
 </div>
 
@@ -514,9 +525,28 @@ function showMenu(){
   document.getElementById('hud').style.display='none';
   canvas.style.transform='';shakeFrame.style.boxShadow='none';
   const mb=document.getElementById('menu-best');
-  if(bestScore>0){mb.style.display='block';mb.textContent='🏆 Best: '+bestScore+'m';}else mb.style.display='none';
+  if(bestScore>0){mb.style.display='block';mb.textContent='🏆 My Best: '+bestScore+'m';}else mb.style.display='none';
   document.getElementById('perm-notice').style.display='block';
   releaseWakeLock();
+  loadMiniLeaderboard();
+}
+
+async function loadMiniLeaderboard(){
+  const el=document.getElementById('mini-lb-inner');
+  const medals=['🥇','🥈','🥉'];
+  const myName=localStorage.getItem('axisdrive_name')||'';
+  const scores=await fetchScores();
+  if(!scores||!scores.length){
+    el.innerHTML='<div style="color:#6699aa;font-size:12px;text-align:center;padding:4px 0">No scores yet — be the first!</div>';
+    return;
+  }
+  scores.sort((a,b)=>b.score-a.score);
+  el.innerHTML=scores.slice(0,3).map((s,i)=>`
+    <div class="mini-lb-row">
+      <div class="mini-rank">${medals[i]}</div>
+      <div class="mini-name${s.name===myName?' ':" "}">${s.name.slice(0,18)}</div>
+      <div class="mini-score">${String(s.score).padStart(3,'0')}m</div>
+    </div>`).join('');
 }
 
 function showSettings(){
