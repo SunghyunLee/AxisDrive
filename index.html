@@ -209,7 +209,7 @@
 // 2. Create a new bin with content: {"scores":[]}
 // 3. Paste the bin ID and your API key below
 // ═══════════════════════════════════════════════════════════════
-const JSONBIN_ID  = '6a3ac2c7da38895dfef2f627';
+const JSONBIN_ID  = '6a3ac4bcda38895dfef30129';
 const JSONBIN_KEY = '$2a$10$RUdllaAnF0Qv6SlgZsRpb.FFEGo7f9ubUuPqfkCreq3soBpO5y3RO';
 const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_ID}`;
 
@@ -573,21 +573,30 @@ function endGame(){
 // LEADERBOARD (JSONBin.io)
 // ═══════════════════════════════════════════════════════════════
 async function fetchScores(){
-  if(JSONBIN_ID==='PASTE_YOUR_BIN_ID_HERE') return [];
   try{
-    const r=await fetch(JSONBIN_URL+'/latest',{headers:{'X-Master-Key':JSONBIN_KEY}});
+    const r=await fetch(JSONBIN_URL+'/latest',{
+      headers:{
+        'X-Master-Key':JSONBIN_KEY,
+        'X-Access-Key':JSONBIN_KEY,
+      }
+    });
+    if(!r.ok){ console.error('JSONBin GET failed:',r.status,await r.text()); return null; }
     const d=await r.json();
     return d.record.scores||[];
-  }catch(e){return [];}
+  }catch(e){ console.error('fetchScores error:',e); return null; }
 }
 
 async function putScores(scores){
-  if(JSONBIN_ID==='PASTE_YOUR_BIN_ID_HERE') return;
-  await fetch(JSONBIN_URL,{
+  const r=await fetch(JSONBIN_URL,{
     method:'PUT',
-    headers:{'Content-Type':'application/json','X-Master-Key':JSONBIN_KEY},
+    headers:{
+      'Content-Type':'application/json',
+      'X-Master-Key':JSONBIN_KEY,
+    },
     body:JSON.stringify({scores})
   });
+  if(!r.ok){ const t=await r.text(); console.error('JSONBin PUT failed:',r.status,t); throw new Error(t); }
+  return r.json();
 }
 
 async function showLeaderboard(){
@@ -622,21 +631,29 @@ async function submitScore(){
   const inp=document.getElementById('name-input');
   const name=(inp.value.trim()||'Anonymous').slice(0,16);
   localStorage.setItem('axisdrive_name',name);
-  // Show submitting state
   const btn=document.querySelector('#name-screen .btn-primary');
   btn.textContent='Submitting...'; btn.disabled=true;
   try{
-    const scores=await fetchScores();
+    let scores=await fetchScores();
+    if(scores===null){
+      // Network error — still go to gameover, don't wipe data
+      btn.textContent='SUBMIT SCORE'; btn.disabled=false;
+      alert('Could not connect to leaderboard. Check your connection and try again.');
+      return;
+    }
     const idx=scores.findIndex(s=>s.name===name);
-    if(idx>=0){if(pendingScore>scores[idx].score)scores[idx].score=pendingScore;}
-    else scores.push({name,score:pendingScore});
+    if(idx>=0){ if(pendingScore>scores[idx].score) scores[idx].score=pendingScore; }
+    else scores.push({name, score:pendingScore});
     scores.sort((a,b)=>b.score-a.score);
     await putScores(scores.slice(0,100));
-  }catch(_){}
-  btn.textContent='SUBMIT SCORE'; btn.disabled=false;
-  allScreensHidden();
-  // Go straight to leaderboard so they see their result
-  showLeaderboard();
+    btn.textContent='SUBMIT SCORE'; btn.disabled=false;
+    allScreensHidden();
+    showLeaderboard();
+  }catch(e){
+    console.error('submitScore error:',e);
+    btn.textContent='SUBMIT SCORE'; btn.disabled=false;
+    alert('Failed to save score: '+e.message);
+  }
 }
 
 function skipSubmit(){
